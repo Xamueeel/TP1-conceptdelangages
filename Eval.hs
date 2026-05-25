@@ -1,4 +1,4 @@
-{- HLINT ignore "Use record patterns" -}
+
 module Eval where
 
 import Parseur ( Sexp(..), Symbol )
@@ -253,7 +253,8 @@ eval env (EApp f arg)   = case eval env f of
 -- Toutes les liaisons sont mutuellement récursives :
 -- construire env2 = (noms ↦ valeurs) ++ env où les valeurs sont elles-mêmes
 -- évaluées dans env2 (nœud de point fixe).
-eval env (ELet [(sym,typ,exp)] e)   = eval(:) e
+eval env (ELet listeLam e)= case eval env e of
+  VLam sym typ exp->eval((sym,eval env e):exp) e
 
 -- TODO: Évaluer une déclaration data.
 -- Les constructeurs deviennent des valeurs dans l'environnement :
@@ -295,11 +296,18 @@ typeCheck env (EVar sym) = lookupSym env sym
 -- TODO: Vérifier le type d'un lambda.
 -- Le paramètre x de type t est ajouté à l'environnement pour typer le corps.
 -- Le type retourné est TArrow t typeCorps.
-typeCheck _ (ELam _ _ _) = error "TODO: implanter typeCheck pour ELam"
+typeCheck env (ELam x t body) =
+  case typeCheck ((x, t) : env) body of
+    Right bodytype -> Right (TArrow t bodytype)
+    Left error -> Left "Erreur lambda typeCheck"
+
 -- TODO: Vérifier le type d'une application f arg.
 -- f doit avoir un type TArrow t1 t2, arg doit avoir le type t1.
 -- Le type retourné est t2.
-typeCheck _ (EApp _ _)   = error "TODO: implanter typeCheck pour EApp"
+typeCheck env (EApp f arg)   = case (typeCheck env f,typeCheck env arg) of
+  (Right (TArrow t1 t2),Right t3) ->
+    (if t1==t3 then Right t2 else Left "Erreur application typeCheck")
+  (Left error1, Left error2) -> Left "Erreur application typeCheck"
 -- TODO: Vérifier le type d'un let.
 -- Toutes les liaisons sont visibles les unes des autres (récursion mutuelle) :
 -- construire env2 avec les types déclarés, vérifier chaque expression,
