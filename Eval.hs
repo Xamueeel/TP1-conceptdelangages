@@ -253,8 +253,15 @@ eval env (EApp f arg)   = case eval env f of
 -- Toutes les liaisons sont mutuellement récursives :
 -- construire env2 = (noms ↦ valeurs) ++ env où les valeurs sont elles-mêmes
 -- évaluées dans env2 (nœud de point fixe).
-eval env (ELet listeLam e)= case eval env e of
-  VLam sym typ exp->eval((sym,eval env e):exp) e
+eval env (ELet lLam e) = eval env2 e
+  where
+    tlLam = map (\(a,_,c) ->(a,eval env2 c)) lLam
+    env2 = tlLam ++ env
+  
+  
+  {- eval env2 e
+  where
+    env2 = (sym, eval env2 exp) : env -}
 
 -- TODO: Évaluer une déclaration data.
 -- Les constructeurs deviennent des valeurs dans l'environnement :
@@ -312,7 +319,9 @@ typeCheck env (EApp f arg)   = case (typeCheck env f,typeCheck env arg) of
 -- Toutes les liaisons sont visibles les unes des autres (récursion mutuelle) :
 -- construire env2 avec les types déclarés, vérifier chaque expression,
 -- puis typer le corps dans env2.
-typeCheck _ (ELet _ _)   = error "TODO: implanter typeCheck pour ELet"
+typeCheck env (ELet [(sym,typ,exp)] body)   = case typeCheck ((sym,typ):env) body of
+  Right bodytype -> Right bodytype
+  Left error ->Left"Erreur let typeCheck"
 -- TODO: Vérifier le type d'une déclaration data.
 -- Vérifications à effectuer :
 --   1. Int ne peut pas être redéfini
