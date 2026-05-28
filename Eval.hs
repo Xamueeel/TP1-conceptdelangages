@@ -2,6 +2,7 @@
 module Eval where
 
 import Parseur ( Sexp(..), Symbol )
+import Distribution.Simple (KnownExtension(EmptyDataDeriving))
 
 -- ===========================================================================
 -- Types
@@ -198,7 +199,24 @@ sexp2Exp (SList [SSym "let", SList definitions, body]) = do
 -- suivis de ses constructeurs. Un constructeur est soit un symbole (0 argument)
 -- soit une liste (nom + types des arguments).
 -- Retourner EData avec la liste des NewDataType et le corps parsé.
-sexp2Exp (SList [SSym "data", SList _, _]) = error "TODO: implanter sexp2Exp pour EData"
+sexp2Exp (SList [SSym "data", SList constructors, body]) = do
+  body' <- sexp2Exp body
+  constructors' <- mapM dataCons2dataTyp constructors
+  return $ EData constructors' body'
+
+  where dataCons2dataTyp :: Sexp -> Either Error NewDataType
+        dataCons2dataTyp (SList (SSym name : args) ) = do
+          cons' <- mapM sexp2dataCons args
+          return (name,cons')
+          where sexp2dataCons :: Sexp -> Either Error DataConstructor
+                sexp2dataCons (SList (SSym name1 : args1) ) = do
+                  args1'<-mapM sexp2type args1
+                  return (name1,args1')
+                sexp2dataCons (SSym sym) = do
+                  return (sym, [])
+                sexp2dataCons _ = Left "Syntax Error : Ill formed data dataconstructor"
+        dataCons2dataTyp _ = Left "Syntax Error : Ill formed data datatype"
+              
 -- TODO: Analyse d'un filtrage par motif.
 -- Syntaxe : (case expr ((Con1 corps1) ((Con2 x y) corps2) ...))
 -- Chaque motif est soit (Con corps) pour un constructeur sans argument,
@@ -248,7 +266,7 @@ eval env (ELam sym _ exp) = VLam sym exp env
 --   - si f est une VPrim, appeler la fonction primitive
 eval env (EApp f arg)   = case eval env f of
   VLam sym exp envf -> eval((sym, eval env arg):envf) exp
-  VPrim f1 -> VPrim f1
+  VPrim f1 -> f1 (eval env arg)
 -- TODO: Évaluer un let.
 -- Toutes les liaisons sont mutuellement récursives :
 -- construire env2 = (noms ↦ valeurs) ++ env où les valeurs sont elles-mêmes
@@ -257,11 +275,6 @@ eval env (ELet lLam e) = eval env2 e
   where
     tlLam = map (\(a,_,c) ->(a,eval env2 c)) lLam
     env2 = tlLam ++ env
-  
-  
-  {- eval env2 e
-  where
-    env2 = (sym, eval env2 exp) : env -}
 
 -- TODO: Évaluer une déclaration data.
 -- Les constructeurs deviennent des valeurs dans l'environnement :
@@ -306,7 +319,7 @@ typeCheck env (EVar sym) = lookupSym env sym
 typeCheck env (ELam x t body) =
   case typeCheck ((x, t) : env) body of
     Right bodytype -> Right (TArrow t bodytype)
-    Left error -> Left "Erreur lambda typeCheck"
+    _ -> Left "Erreur lambda typeCheck"
 
 -- TODO: Vérifier le type d'une application f arg.
 -- f doit avoir un type TArrow t1 t2, arg doit avoir le type t1.
@@ -314,14 +327,22 @@ typeCheck env (ELam x t body) =
 typeCheck env (EApp f arg)   = case (typeCheck env f,typeCheck env arg) of
   (Right (TArrow t1 t2),Right t3) ->
     (if t1==t3 then Right t2 else Left "Erreur application typeCheck")
-  (Left error1, Left error2) -> Left "Erreur application typeCheck"
+  _ -> Left "Erreur application typeCheck"
 -- TODO: Vérifier le type d'un let.
 -- Toutes les liaisons sont visibles les unes des autres (récursion mutuelle) :
 -- construire env2 avec les types déclarés, vérifier chaque expression,
 -- puis typer le corps dans env2.
-typeCheck env (ELet [(sym,typ,exp)] body)   = case typeCheck ((sym,typ):env) body of
-  Right bodytype -> Right bodytype
-  Left error ->Left"Erreur let typeCheck"
+typeCheck env (ELet lLam body)   = let
+    tlLam = map (\(a,b,_) ->(a,b)) lLam
+    env2 = tlLam ++ env
+    lFin = filter (\(_,b,c) -> typeCheck env2 c == Right b) lLam
+    in
+    if length lFin == length lLam then
+    case typeCheck env2 body of
+      Right b -> Right b
+      _ -> Left "Erreur ELet typeCheck"
+    else
+      Left "Erreur ELet typeCheck"
 -- TODO: Vérifier le type d'une déclaration data.
 -- Vérifications à effectuer :
 --   1. Int ne peut pas être redéfini
