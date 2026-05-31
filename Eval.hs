@@ -193,7 +193,7 @@ sexp2Exp (SList [SSym "let", SList definitions, body]) = do
             return (var, t', exp')
         def2Exp _ = Left "Syntax Error : Ill formed let definition"
 
--- TODO: Analyse d'une déclaration de types algébriques.
+-- Analyse d'une déclaration de types algébriques.
 -- Syntaxe : (data ((NomType Con1 (Con2 T1 T2) ...) ...) corps)
 -- Chaque type est une liste dont le premier élément est le nom du type,
 -- suivis de ses constructeurs. Un constructeur est soit un symbole (0 argument)
@@ -217,12 +217,30 @@ sexp2Exp (SList [SSym "data", SList constructors, body]) = do
                 sexp2dataCons _ = Left "Syntax Error : Ill formed data dataconstructor"
         dataCons2dataTyp _ = Left "Syntax Error : Ill formed data datatype"
               
--- TODO: Analyse d'un filtrage par motif.
+-- Analyse d'un filtrage par motif.
 -- Syntaxe : (case expr ((Con1 corps1) ((Con2 x y) corps2) ...))
 -- Chaque motif est soit (Con corps) pour un constructeur sans argument,
 -- soit ((Con x y ...) corps) pour un constructeur avec variables liées.
 -- Retourner ECase avec l'expression scrutée et la liste des CasePattern.
-sexp2Exp (SList [SSym "case", _, SList _]) = error "TODO: implanter sexp2Exp pour ECase"
+sexp2Exp (SList [SSym "case", exp, SList patterns]) = do
+  exp' <- sexp2Exp exp
+  patterns' <- mapM pat2Case patterns
+  return $ ECase exp' patterns'
+
+  where
+    pat2Case :: Sexp -> Either Error CasePattern
+
+    pat2Case (SList [SSym con, body]) = do
+      body' <- sexp2Exp body
+      return (con, [], body')
+
+    pat2Case (SList [SList (SSym con : vars), body]) = do
+      vars' <- mapM id2Exp vars
+      body' <- sexp2Exp body
+      return (con, vars', body')
+
+    pat2Case _ =
+      Left "Syntax Error : Ill formed case pattern"
 
 -- Application gauche-associative :
 -- (f a b c) → EApp (EApp (EApp f a) b) c
@@ -260,14 +278,14 @@ eval _ (EInt x) = VInt x
 eval env (EVar sym) = lookupVar env sym
 -- Un lambda s'évalue en une fermeture qui capture l'environnement courant.
 eval env (ELam sym _ exp) = VLam sym exp env
--- TODO: Évaluer une application f arg.
+-- Évaluer une application f arg.
 -- Évaluer f et arg, puis appliquer :
 --   - si f est une VLam, étendre la fermeture et évaluer le corps
 --   - si f est une VPrim, appeler la fonction primitive
 eval env (EApp f arg)   = case eval env f of
   VLam sym exp envf -> eval((sym, eval env arg):envf) exp
   VPrim f1 -> f1 (eval env arg)
--- TODO: Évaluer un let.
+-- Évaluer un let.
 -- Toutes les liaisons sont mutuellement récursives :
 -- construire env2 = (noms ↦ valeurs) ++ env où les valeurs sont elles-mêmes
 -- évaluées dans env2 (nœud de point fixe).
@@ -276,17 +294,56 @@ eval env (ELet lLam e) = eval env2 e
     tlLam = map (\(a,_,c) ->(a,eval env2 c)) lLam
     env2 = tlLam ++ env
 
--- TODO: Évaluer une déclaration data.
+-- Évaluer une déclaration data.
 -- Les constructeurs deviennent des valeurs dans l'environnement :
 --   - constructeur sans argument → VData "Nom" []
 --   - constructeur avec n arguments → une suite de VPrim qui accumulent
 --     les arguments et produisent un VData quand tous sont fournis.
-eval _ (EData _ _) = error "TODO: implanter eval pour EData"
--- TODO: Évaluer un case.
+eval env (EData dts body) =
+  eval env2 body
+  where
+    env2 = constructors ++ env
+
+    constructors =
+      concatMap mkType dts
+
+    mkType (_, conss) =
+      map mkConstructor conss
+
+    mkConstructor (name, ts) =
+      (name, build name ts [])
+
+    build name [] acc =
+      VData name (reverse acc)
+
+    build name (_:rest) acc =
+      VPrim (\v -> build name rest (v:acc))
+
+-- Évaluer un case.
 -- Évaluer l'expression scrutée (doit donner un VData).
 -- Trouver le motif dont le constructeur correspond, lier les variables
 -- aux arguments du VData, puis évaluer le corps dans cet environnement étendu.
-eval _ (ECase _ _) = error "TODO: implanter eval pour ECase"
+eval env (ECase exp patterns) =
+  case eval env exp of
+
+    VData cname vals ->
+      match cname vals patterns
+
+    _ ->
+      error "case on non-data value"
+
+  where
+
+    match _ _ [] =
+      error "non exhaustive pattern match"
+
+    match cname vals ((pname, vars, body):ps)
+
+      | cname == pname =
+          eval (zip vars vals ++ env) body
+
+      | otherwise =
+          match cname vals ps
 
 -- ===========================================================================
 -- Vérification de types
@@ -313,7 +370,7 @@ lookupSym (_ : xs) sym = lookupSym xs sym
 typeCheck :: Tenv -> Exp -> Either Error Type
 typeCheck _ (EInt _) = Right TInt
 typeCheck env (EVar sym) = lookupSym env sym
--- TODO: Vérifier le type d'un lambda.
+-- Vérifier le type d'un lambda.
 -- Le paramètre x de type t est ajouté à l'environnement pour typer le corps.
 -- Le type retourné est TArrow t typeCorps.
 typeCheck env (ELam x t body) =
@@ -321,14 +378,14 @@ typeCheck env (ELam x t body) =
     Right bodytype -> Right (TArrow t bodytype)
     _ -> Left "Erreur lambda typeCheck"
 
--- TODO: Vérifier le type d'une application f arg.
+-- Vérifier le type d'une application f arg.
 -- f doit avoir un type TArrow t1 t2, arg doit avoir le type t1.
 -- Le type retourné est t2.
 typeCheck env (EApp f arg)   = case (typeCheck env f,typeCheck env arg) of
   (Right (TArrow t1 t2),Right t3) ->
     (if t1==t3 then Right t2 else Left "Erreur application typeCheck")
   _ -> Left "Erreur application typeCheck"
--- TODO: Vérifier le type d'un let.
+-- Vérifier le type d'un let.
 -- Toutes les liaisons sont visibles les unes des autres (récursion mutuelle) :
 -- construire env2 avec les types déclarés, vérifier chaque expression,
 -- puis typer le corps dans env2.
@@ -343,7 +400,7 @@ typeCheck env (ELet lLam body)   = let
       _ -> Left "Erreur ELet typeCheck"
     else
       Left "Erreur ELet typeCheck"
--- TODO: Vérifier le type d'une déclaration data.
+-- Vérifier le type d'une déclaration data.
 -- Vérifications à effectuer :
 --   1. Int ne peut pas être redéfini
 --   2. Les noms de types sont tous distincts
@@ -352,8 +409,24 @@ typeCheck env (ELet lLam body)   = let
 -- Chaque constructeur (Nom T1 T2) introduit une liaison dans l'environnement
 -- de type : Nom :: T1 -> T2 -> NomType.
 -- Le corps est ensuite typé dans cet environnement étendu.
-typeCheck _ (EData _ _) = error "TODO: implanter typeCheck pour EData"
--- TODO: Vérifier le type d'un case.
+typeCheck env (EData dts body) =
+  typeCheck env2 body
+  where
+
+    env2 =
+      constructorEnv ++ env
+
+    constructorEnv =
+      concatMap mkType dts
+
+    mkType (typeName, conss) =
+      map (mkConstructor typeName) conss
+
+    mkConstructor typeName (conName,args) =
+      (conName,
+       foldr TArrow (TData typeName) args)
+
+-- Vérifier le type d'un case.
 -- L'expression scrutée doit être de type TData nomType.
 -- Pour chaque motif :
 --   - retrouver le type du constructeur dans l'environnement
@@ -362,4 +435,34 @@ typeCheck _ (EData _ _) = error "TODO: implanter typeCheck pour EData"
 -- Vérifications supplémentaires :
 --   - tous les constructeurs du type doivent être couverts (exhaustivité)
 --   - tous les corps doivent avoir le même type
-typeCheck _ (ECase _ _) = error "TODO: implanter typeCheck pour ECase"
+typeCheck env (ECase exp patterns) = do
+
+  scrutineeType <- typeCheck env exp
+
+  case scrutineeType of
+
+    TData _ -> do
+
+      branchTypes <- mapM (checkPattern env) patterns
+
+      case branchTypes of
+
+        [] ->
+          Left "empty case"
+
+        (t:ts)
+          | all (== t) ts -> Right t
+          | otherwise ->
+              Left "case branches have different types"
+    _ ->
+      Left "case expects data type"
+
+  where
+
+    checkPattern :: Tenv -> CasePattern -> Either Error Type
+    checkPattern env0 (_, vars, body) =
+
+      let env1 =
+            [(v, TInt) | v <- vars] ++ env0
+
+      in typeCheck env1 body
